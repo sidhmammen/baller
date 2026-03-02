@@ -1,4 +1,4 @@
-# Baller — Fantasy NBA Streaming Assistant
+# Baller - Fantasy NBA Streaming Assistant
 
 A full-stack web app for daily fantasy basketball streaming decisions and pre-game lineup alerts, built for Sleeper leagues.
 
@@ -116,36 +116,6 @@ The formula breakdown is visible in the UI for every player. Click any player ca
 14 teams × 13 spots ≈ 182 players owned → #183+ likely available
 ```
 Rankings are based on NBA API season fantasy point averages (Sleeper scoring format).
-
----
-
-## Deploying for a Live Demo URL (employer-ready)
-
-### Option 1: Render (Recommended — free tier)
-1. Push to GitHub
-2. Create a Render account at render.com
-3. Deploy backend as a **Web Service** (Python, `uvicorn main:app --host 0.0.0.0 --port $PORT`)
-4. Add a **PostgreSQL** database on Render (free tier available)
-5. Add a **Redis** instance (Render's Redis or Upstash.com free tier)
-6. Deploy frontend as a **Static Site** (`npm run build`, publish `dist/`)
-7. Set env vars: `DATABASE_URL`, `REDIS_URL`, `VITE_API_URL`, `VITE_WS_URL`
-8. You'll get a permanent URL like `https://hoopstream.onrender.com`
-
-### Option 2: Railway
-1. Push to GitHub
-2. railway.app → New Project → Deploy from GitHub
-3. Railway auto-detects Docker Compose and deploys all 4 services
-4. Generates a public URL immediately
-
-### Option 3: Ngrok (quick local demo)
-```bash
-# Run the app locally first
-docker compose up
-
-# In another terminal
-ngrok http 3000
-# Gives you a temporary https://xxxx.ngrok.io URL
-```
 
 ---
 
