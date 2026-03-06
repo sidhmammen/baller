@@ -1,142 +1,77 @@
 """
-Core streaming logic — computes stream scores for roster players
-and waiver wire targets.
+Streaming engine — cache-only.
 
-Stream Score Formula (visible to user in UI):
-  score = (games_this_week × 3)
-        + (avg_fantasy_pts × 1.5)
-        - (back_to_back_count × 2)
-        + (schedule_bonus)            # +3 if facing bottom-10 defense
-        - (injury_penalty)            # -5 if questionable
-
-Each component is returned separately so the UI can show the breakdown.
+This must stay non-blocking for /schedule:
+- Pull schedules from Redis (schedule:week2:TEAM:MONDAY)
+- Pull def ratings from Redis (nba:def_ratings)
 """
-from datetime import datetime, timedelta
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional, List, Dict
 import pytz
-from typing import Optional
+
 from services.nba_data import (
-    get_team_schedule_this_week,
-    get_team_def_ratings,
-    get_player_season_averages,
+    get_player_season_averages_cached,
+    get_team_schedule_cached,
+    get_team_def_ratings_cached,
+    normalize_player_name,
 )
 
 EASTERN = pytz.timezone("America/New_York")
 
-GAMES_PER_WEEK_WEIGHT = 3.0
-AVG_PTS_WEIGHT = 1.5
-BACK_TO_BACK_PENALTY = 2.0
-TOUGH_DEF_PENALTY = -2.0    # facing top-10 defense
-SOFT_DEF_BONUS = 3.0        # facing bottom-10 defense
-INJURY_Q_PENALTY = 5.0
-INJURY_O_PENALTY = 10.0
+# -------------------------
+# Scoring config (tweakable)
+# -------------------------
+GAMES_WEIGHT = 3.0
+AVG_PTS_WEIGHT = 1.5        # keep name used in your codebase
+B2B_BONUS = 1.5             # keep name used in your codebase
+SOFT_DEF_BONUS = 3.0        # opponent def_rank >= 22
+TOUGH_DEF_PENALTY = 2.0     # opponent def_rank <= 8
 
-async def compute_player_week(
-    player_id: str,
-    player_name: str,
-    team_abbr: str,
-    position: str,
-    avg_fantasy_pts: float,
-    injury_status: Optional[str],
-    nba_player_id: Optional[str] = None,
-) -> dict:
+# Optional extra bonuses used by your current file
+EFFICIENCY_MAX = 4.0
+DURABILITY_MAX = 3.0
+
+
+def compute_efficiency_bonus(avg_fantasy_pts: float, avg_minutes: float) -> float:
     """
-    Returns full week breakdown + stream score for a single player.
+    Small bump for players producing well per minute.
+    Stable and bounded so it doesn't dominate the main formula.
     """
-    def_ratings = await get_team_def_ratings()
-    games = await get_team_schedule_this_week(team_abbr)
+    if avg_minutes <= 0:
+        return 0.0
+    per_min = avg_fantasy_pts / avg_minutes
+    # Typical fantasy pts/min ranges ~0.6-1.3; scale into 0..EFFICIENCY_MAX
+    bonus = (per_min - 0.75) * 10.0
+    return max(0.0, min(EFFICIENCY_MAX, bonus))
 
-    # Detect back-to-backs
-    game_dates = []
-    for g in games:
-        try:
-            dt = datetime.strptime(g["game_date"], "%Y-%m-%d").date()
-            game_dates.append(dt)
-        except Exception:
-            pass
-    game_dates.sort()
 
-    back_to_back_count = 0
-    back_to_back_dates = set()
-    for i in range(1, len(game_dates)):
-        if (game_dates[i] - game_dates[i - 1]).days == 1:
-            back_to_back_count += 1
-            back_to_back_dates.add(game_dates[i])
-            back_to_back_dates.add(game_dates[i - 1])
+def compute_durability_bonus(games_played: int) -> float:
+    """
+    Small bump for players who have actually played games (reduces risk).
+    """
+    if games_played <= 0:
+        return 0.0
+    if games_played >= 60:
+        return DURABILITY_MAX
+    return (games_played / 60.0) * DURABILITY_MAX
 
-    # Enrich games with defense info
-    enriched_games = []
-    schedule_bonus = 0.0
-    for g in games:
-        opp = g.get("opponent", "")
-        opp_def = def_ratings.get(opp, {})
-        def_rank = opp_def.get("def_rank", 15)
-        opp_pts = opp_def.get("opp_pts", 110.0)
 
-        try:
-            gdate = datetime.strptime(g["game_date"], "%Y-%m-%d").date()
-            is_b2b = gdate in back_to_back_dates
-        except Exception:
-            is_b2b = False
+def _injury_penalty(status: Optional[str]) -> float:
+    s = (status or "").upper()
+    if "OUT" in s:
+        return 10.0
+    if "GTD" in s or "QUESTION" in s:
+        return 5.0
+    return 0.0
 
-        # Bonus/penalty per game
-        if def_rank >= 21:  # bottom-10 defense
-            schedule_bonus += SOFT_DEF_BONUS
-            matchup_grade = "A"
-        elif def_rank <= 10:  # top-10 defense
-            schedule_bonus += TOUGH_DEF_PENALTY
-            matchup_grade = "C"
-        else:
-            matchup_grade = "B"
 
-        enriched_games.append({
-            **g,
-            "is_back_to_back": is_b2b,
-            "opp_def_rank": def_rank,
-            "opp_pts_allowed": opp_pts,
-            "matchup_grade": matchup_grade,
-        })
-
-    # Injury penalty
-    injury_penalty = 0.0
-    if injury_status in ("Q", "GTD"):
-        injury_penalty = INJURY_Q_PENALTY
-    elif injury_status in ("O", "IR", "INJ"):
-        injury_penalty = INJURY_O_PENALTY
-
-    games_count = len(games)
-    score = (
-        (games_count * GAMES_PER_WEEK_WEIGHT)
-        + (avg_fantasy_pts * AVG_PTS_WEIGHT)
-        - (back_to_back_count * BACK_TO_BACK_PENALTY)
-        + schedule_bonus
-        - injury_penalty
-    )
-
-    return {
-        "player_id": player_id,
-        "player_name": player_name,
-        "team": team_abbr,
-        "position": position,
-        "avg_fantasy_pts": avg_fantasy_pts,
-        "injury_status": injury_status,
-        "games_this_week": games_count,
-        "schedule": enriched_games,
-        "back_to_back_count": back_to_back_count,
-        "stream_score": round(score, 1),
-        "score_breakdown": {
-            "games_component": round(games_count * GAMES_PER_WEEK_WEIGHT, 1),
-            "avg_pts_component": round(avg_fantasy_pts * AVG_PTS_WEIGHT, 1),
-            "b2b_penalty": round(-back_to_back_count * BACK_TO_BACK_PENALTY, 1),
-            "schedule_bonus": round(schedule_bonus, 1),
-            "injury_penalty": round(-injury_penalty, 1),
-        },
-        "stream_recommendation": _grade(score, games_count, injury_status),
-    }
-
-def _grade(score: float, games: int, injury: Optional[str]) -> str:
-    if injury in ("O", "IR"):
+def _recommendation(score: float, injury_status: Optional[str]) -> str:
+    s = (injury_status or "").upper()
+    if "OUT" in s:
         return "OUT"
-    if injury in ("Q", "GTD"):
+    if "GTD" in s or "QUESTION" in s:
         return "QUESTIONABLE"
     if score >= 55:
         return "MUST_PLAY"
@@ -146,79 +81,155 @@ def _grade(score: float, games: int, injury: Optional[str]) -> str:
         return "SIT"
     return "DROP"
 
+
+def _b2b_count(game_dates: List[str]) -> int:
+    """
+    game_dates are YYYY-MM-DD strings.
+    Returns number of back-to-back *occurrences*.
+    """
+    parsed = []
+    for s in game_dates:
+        try:
+            parsed.append(datetime.strptime(s, "%Y-%m-%d").date())
+        except Exception:
+            pass
+    parsed.sort()
+    b2b = 0
+    for i in range(1, len(parsed)):
+        if (parsed[i] - parsed[i - 1]).days == 1:
+            b2b += 1
+    return b2b
+
+
+async def compute_player_week(
+    player_id: str,
+    player_name: str,
+    team_abbr: str,
+    position: str,
+    avg_fantasy_pts: float,
+    injury_status: Optional[str],
+    week_key: Optional[str] = None,
+) -> dict:
+    """
+    Cache-only: reads schedule + def ratings from Redis.
+    """
+    def_ratings = await get_team_def_ratings_cached()
+    games = await get_team_schedule_cached(team_abbr, week_key=week_key)
+
+    # b2b
+    game_dates = [g.get("game_date", "") for g in games if g.get("game_date")]
+    b2b_count = _b2b_count(game_dates)
+
+    schedule_bonus = 0.0
+    enriched: List[Dict] = []
+    for g in games:
+        opp = g.get("opponent", "")
+        def_rank = int(def_ratings.get(opp, {}).get("def_rank", 15))
+
+        if def_rank >= 22:
+            schedule_bonus += SOFT_DEF_BONUS
+            grade = "A"
+        elif def_rank <= 8:
+            schedule_bonus -= TOUGH_DEF_PENALTY
+            grade = "C"
+        else:
+            grade = "B"
+
+        gg = dict(g)
+        gg["matchup_grade"] = grade
+        # basic b2b tagging (optional)
+        gg["is_back_to_back"] = False
+        enriched.append(gg)
+
+    injury_pen = _injury_penalty(injury_status)
+    games_count = len(games)
+
+    # Optional enhancements (won't break if you don't have mins/gp)
+    avg_minutes = 0.0
+    games_played = 0
+    # schedule.py can optionally add these if desired
+
+    efficiency_bonus = compute_efficiency_bonus(avg_fantasy_pts, avg_minutes)
+    durability_bonus = compute_durability_bonus(games_played)
+
+    score = (
+        (games_count * GAMES_WEIGHT)
+        + (avg_fantasy_pts * AVG_PTS_WEIGHT)
+        + (b2b_count * B2B_BONUS)
+        + schedule_bonus
+        + efficiency_bonus
+        + durability_bonus
+        - injury_pen
+    )
+
+    return {
+        "player_id": player_id,
+        "player_name": player_name,
+        "team": team_abbr,
+        "position": position,
+        "avg_fantasy_pts": avg_fantasy_pts,
+        "games_this_week": games_count,
+        "b2b_count": b2b_count,
+        "schedule_bonus": round(schedule_bonus, 1),
+        "injury_penalty": injury_pen,
+        "stream_score": round(score, 1),
+        "recommendation": _recommendation(score, injury_status),
+        "schedule": enriched,
+    }
+
 async def get_waiver_targets(
     league_size: int,
-    roster_player_ids: list[str],
+    owned_names: set,
     limit: int = 20,
 ) -> list[dict]:
-    """
-    Returns top streamable players not on the user's roster,
-    estimated to be available based on league size.
-    
-    Ownership thresholds (approximate roster spots):
-      6 teams  × 13 spots = ~78 players owned
-      8 teams  × 13 spots = ~104 players owned
-      10 teams × 13 spots = ~130 players owned
-      12 teams × 13 spots = ~156 players owned
-      14 teams × 13 spots = ~182 players owned
-    """
-    ownership_cutoff = {6: 78, 8: 104, 10: 130, 12: 156, 14: 182}
-    cutoff = ownership_cutoff.get(league_size, 130)
+    avgs = await get_player_season_averages_cached()
+    def_ratings = await get_team_def_ratings_cached()
+    if not avgs:
+        return []
 
-    avgs = await get_player_season_averages()
-    def_ratings = await get_team_def_ratings()
+    # Pre-fetch unique team schedules (cache-only)
+    unique_teams = list({s.get("team", "") for s in avgs.values() if s.get("team")})
+    team_schedules = {}
+    for team in unique_teams:
+        team_schedules[team] = await get_team_schedule_cached(team)
 
-    # Sort all players by fantasy pts, take those outside ownership threshold
-    sorted_players = sorted(avgs.items(), key=lambda x: x[1]["fantasy_pts"], reverse=True)
-    
-    # Players ranked beyond cutoff are likely available
-    available_players = sorted_players[cutoff:]
-    
-    # Also ensure they're not on the user's roster
-    # Note: nba_api uses numeric player IDs, Sleeper uses string IDs
-    # We store the Sleeper IDs in roster, but nba_api IDs are different.
-    # We match by name as a bridge (handled in the router layer).
-    
     targets = []
-    for rank, (nba_pid, stats) in enumerate(available_players[:limit * 2], start=cutoff + 1):
+    sorted_players = sorted(avgs.items(), key=lambda x: x[1].get("fantasy_pts", 0), reverse=True)
+
+    for nba_pid, stats in sorted_players:
+        player_name = stats.get("name", "")
+        if not player_name:
+            continue
+
+        # Skip anyone owned in the league (real data)
+        if normalize_player_name(player_name) in owned_names:
+            continue
+
         team = stats.get("team", "")
-        games = await get_team_schedule_this_week(team)
+        if not team:
+            continue
+
+        games = team_schedules.get(team, [])
         games_count = len(games)
-        
         if games_count == 0:
             continue
 
-        # Compute simple schedule bonus
+        # Detect B2Bs
+        game_dates = []
+        for g in games:
+            try:
+                game_dates.append(datetime.strptime(g["game_date"], "%Y-%m-%d").date())
+            except Exception:
+                pass
+        game_dates.sort()
+        b2b_count = sum(
+            1 for i in range(1, len(game_dates))
+            if (game_dates[i] - game_dates[i - 1]).days == 1
+        )
+
         schedule_bonus = 0.0
         for g in games:
             opp = g.get("opponent", "")
             def_rank = def_ratings.get(opp, {}).get("def_rank", 15)
             if def_rank >= 21:
                 schedule_bonus += SOFT_DEF_BONUS
-            elif def_rank <= 10:
-                schedule_bonus += TOUGH_DEF_PENALTY
-
-        fp = stats.get("fantasy_pts", 0)
-        score = (games_count * GAMES_PER_WEEK_WEIGHT) + (fp * AVG_PTS_WEIGHT) + schedule_bonus
-
-        targets.append({
-            "nba_player_id": nba_pid,
-            "player_name": stats.get("name", ""),
-            "team": team,
-            "avg_fantasy_pts": fp,
-            "games_this_week": games_count,
-            "stream_score": round(score, 1),
-            "estimated_rank": rank,
-            "likely_available": True,
-            "score_breakdown": {
-                "games_component": round(games_count * GAMES_PER_WEEK_WEIGHT, 1),
-                "avg_pts_component": round(fp * AVG_PTS_WEIGHT, 1),
-                "schedule_bonus": round(schedule_bonus, 1),
-            },
-        })
-
-        if len(targets) >= limit:
-            break
-
-    targets.sort(key=lambda x: x["stream_score"], reverse=True)
-    return targets

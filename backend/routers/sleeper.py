@@ -11,7 +11,7 @@ async def lookup_user(username: str):
     return user
 
 @router.get("/user/{username}/leagues")
-async def get_leagues_for_user(username: str, season: str = "2024"):
+async def get_leagues_for_user(username: str, season: str = "2025"):
     user = await get_sleeper_user(username)
     if not user:
         raise HTTPException(status_code=404, detail="Sleeper user not found")

@@ -37,6 +37,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://fantasy:fantasy123@postgres:5432/fantasy_nba
       REDIS_URL: redis://redis:6379
+      BALLDONTLIE_API_KEY: 61f1fddd-cf9b-4ad4-9d78-05c097fae76a
     depends_on:
       postgres:
         condition: service_healthy

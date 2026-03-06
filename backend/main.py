@@ -28,17 +28,14 @@ app.include_router(notifications.router)
 app.include_router(sleeper.router)
 
 
+from services.notifier import start_redis_subscriber, start_score_broadcaster
+
 @app.on_event("startup")
 async def startup():
-    # Initialize DB tables
     await init_db()
-
-    # Start Redis subscriber in background
     asyncio.create_task(start_redis_subscriber())
-
-    # Start APScheduler
+    asyncio.create_task(start_score_broadcaster())  # ← add this line
     init_scheduler()
-
     print("🏀 Fantasy NBA API started")
 
 

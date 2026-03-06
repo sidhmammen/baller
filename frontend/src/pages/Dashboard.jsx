@@ -55,7 +55,7 @@ export function Dashboard({ sessionId, onResetRoster }) {
       <header className="sticky top-0 z-40 bg-court-950/90 backdrop-blur-md border-b border-court-800">
         <div className="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h1 className="font-display text-2xl text-white tracking-widest">HOOPSTREAM</h1>
+            <h1 className="font-display text-2xl text-white tracking-widest">baller</h1>
             <div className={clsx(
               'flex items-center gap-1.5 text-[10px] font-mono px-2 py-0.5 rounded-full border',
               connected

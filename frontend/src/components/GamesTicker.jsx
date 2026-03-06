@@ -7,7 +7,10 @@ export function GamesTicker({ games }) {
     <div className="overflow-x-auto scrollbar-none">
       <div className="flex gap-2 pb-1" style={{ minWidth: 'max-content' }}>
         {games.map(g => (
-          <GameChip key={g.game_id} game={g} />
+          <GameChip
+              key={g.game_id || `${g.away_team}-${g.home_team}-${g.game_time_utc || g.status || ''}`}
+              game={g}
+            />
         ))}
       </div>
     </div>

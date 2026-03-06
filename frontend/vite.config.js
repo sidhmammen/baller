@@ -7,14 +7,25 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 3000,
     proxy: {
-      '/api': {
+      '/notifications': {
         target: 'http://backend:8000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
       },
-      '/ws': {
-        target: 'ws://backend:8000',
-        ws: true,
+      '/roster': {
+        target: 'http://backend:8000',
+        changeOrigin: true,
+      },
+      '/schedule': {
+        target: 'http://backend:8000',
+        changeOrigin: true,
+      },
+      '/players': {
+        target: 'http://backend:8000',
+        changeOrigin: true,
+      },
+      '/sleeper': {
+        target: 'http://backend:8000',
+        changeOrigin: true,
       },
     },
   },

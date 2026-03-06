@@ -17,7 +17,7 @@ function ModeChooser({ onMode }) {
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4 py-16">
       <div className="text-center mb-12">
-        <h1 className="font-display text-6xl text-white tracking-widest mb-3">HOOPSTREAM</h1>
+        <h1 className="font-display text-6xl text-white tracking-widest mb-3">baller</h1>
         <p className="text-slate-400 text-lg">Daily streaming decisions + pre-game lineup alerts</p>
       </div>
 
@@ -93,10 +93,17 @@ function SleeperImport({ onComplete }) {
         league_size: leagueSize,
         scoring_type: scoringType,
       })
-      saveSession(res.data.session_id)
-      onComplete(res.data.session_id)
+      console.log('Setup response:', res.data)
+      const sid = res.data.session_id
+      if (!sid) {
+        console.error('No session_id in response!')
+        return
+      }
+      localStorage.setItem('fantasy_nba_session_id', sid)
+      console.log('Session saved:', sid)
+      onComplete(sid)
     } catch (err) {
-      console.error(err)
+      console.error('Import failed:', err.response?.data || err.message)
     }
   }
 

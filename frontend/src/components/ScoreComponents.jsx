@@ -55,7 +55,6 @@ export function RecommendationBadge({ rec }) {
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 export function WeekCalendar({ schedule }) {
-  // Build a Mon–Sun grid for this week
   const today = new Date()
   const monday = new Date(today)
   monday.setDate(today.getDate() - ((today.getDay() + 6) % 7))
@@ -75,9 +74,17 @@ export function WeekCalendar({ schedule }) {
   return (
     <div className="grid grid-cols-7 gap-1 mt-2">
       {days.map((d, i) => {
-        const key = d.toISOString().split('T')[0]
+        const fmt = (dt) => {
+          const y = dt.getFullYear()
+          const m = String(dt.getMonth() + 1).padStart(2, '0')
+          const day = String(dt.getDate()).padStart(2, '0')
+          return `${y}-${m}-${day}`
+        }
+
+        const key = fmt(d)
+        const isToday = key === fmt(today)
         const game = gamesByDate[key]
-        const isToday = key === today.toISOString().split('T')[0]
+        const isPast = d < today && !isToday
 
         return (
           <div
@@ -85,6 +92,7 @@ export function WeekCalendar({ schedule }) {
             className={clsx(
               'flex flex-col items-center gap-1 py-1.5 px-1 rounded-md text-[10px]',
               isToday && 'ring-1 ring-brand/40',
+              isPast && !game && 'opacity-20',
               game
                 ? game.is_back_to_back
                   ? 'bg-yellow-500/10 border border-yellow-500/20'
@@ -93,7 +101,7 @@ export function WeekCalendar({ schedule }) {
                     : game.matchup_grade === 'C'
                       ? 'bg-slate-800/50 border border-slate-700/30'
                       : 'bg-court-800 border border-court-700'
-                : 'bg-transparent border border-transparent opacity-30',
+                : 'bg-transparent border border-transparent',
             )}
           >
             <span className="text-slate-500 font-body">{DAY_LABELS[i]}</span>
@@ -106,9 +114,7 @@ export function WeekCalendar({ schedule }) {
                 )}>
                   {game.opponent}
                 </span>
-                {game.is_back_to_back && (
-                  <span className="text-yellow-400 text-[8px]">B2B</span>
-                )}
+                {game.is_back_to_back && <span className="text-yellow-400 text-[8px]">B2B</span>}
                 {game.matchup_grade === 'A' && !game.is_back_to_back && (
                   <span className="text-green-400 text-[8px]">A</span>
                 )}

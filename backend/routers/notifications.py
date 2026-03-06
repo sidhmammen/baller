@@ -12,40 +12,31 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 @router.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    """
-    WebSocket endpoint. One connection per session.
-    - Registers the connection with the notifier
-    - Sends unread notifications on connect
-    - Listens for client messages (e.g. mark_read)
-    - Stays open until client disconnects
-    """
     await websocket.accept()
     notifier.register(session_id, websocket)
-    
+
     # Send today's games immediately on connect
     try:
         games = await get_todays_games()
-        await websocket.send_json({
-            "type": "today_games",
-            "games": games,
-        })
+        await websocket.send_json({"type": "today_games", "games": games})
     except Exception:
         pass
-    
+
     try:
         while True:
-            # Keep connection alive, handle incoming messages
             data = await websocket.receive_text()
             try:
                 msg = json.loads(data)
                 if msg.get("type") == "ping":
                     await websocket.send_json({"type": "pong"})
-                elif msg.get("type") == "mark_read":
-                    # Client acknowledges notification
-                    pass
             except Exception:
                 pass
     except WebSocketDisconnect:
+        notifier.unregister(session_id, websocket)
+    except RuntimeError:
+        # Client disconnected abruptly without a clean close frame
+        notifier.unregister(session_id, websocket)
+    except Exception:
         notifier.unregister(session_id, websocket)
 
 @router.get("/{session_id}")

@@ -1,7 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000'
-
 export function useWebSocket(sessionId, onMessage) {
   const ws = useRef(null)
   const [connected, setConnected] = useState(false)
@@ -14,45 +12,33 @@ export function useWebSocket(sessionId, onMessage) {
     if (!sessionId) return
     if (ws.current?.readyState === WebSocket.OPEN) return
 
-    const url = `${WS_URL}/notifications/ws/${sessionId}`
-    const socket = new WebSocket(url)
+    // Use same host/port as the page — goes through Vite proxy
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const socket = new WebSocket(`ws://localhost:8000/notifications/ws/${sessionId}`)
 
     socket.onopen = () => {
       setConnected(true)
       console.log('[ws] Connected')
-      // Start ping interval
-      socket._pingInterval = setInterval(() => {
+      socket._ping = setInterval(() => {
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(JSON.stringify({ type: 'ping' }))
         }
       }, 25000)
     }
-
-    socket.onmessage = (event) => {
+    socket.onmessage = (e) => {
       try {
-        const data = JSON.parse(event.data)
-        if (data.type === 'today_games') {
-          setTodayGames(data.games || [])
-          return
-        }
+        const data = JSON.parse(e.data)
+        if (data.type === 'today_games') { setTodayGames(data.games || []); return }
         if (data.type === 'pong') return
         onMessageRef.current?.(data)
-      } catch (e) {
-        console.error('[ws] Parse error', e)
-      }
+      } catch {}
     }
-
-    socket.onerror = (err) => {
-      console.error('[ws] Error', err)
-    }
-
+    socket.onerror = (err) => console.error('[ws] Error', err)
     socket.onclose = () => {
       setConnected(false)
-      clearInterval(socket._pingInterval)
-      console.log('[ws] Disconnected — reconnecting in 3s...')
+      clearInterval(socket._ping)
       reconnectTimeout.current = setTimeout(connect, 3000)
     }
-
     ws.current = socket
   }, [sessionId])
 
